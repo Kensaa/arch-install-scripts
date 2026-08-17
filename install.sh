@@ -1,11 +1,19 @@
 #! /usr/bin/env bash
+set -euo pipefail
 
 KERNEL_ARGS="net.iframes=0 biosdevname=0"
+
 pacman -Syu --noconfirm --needed dialog sudo networkmanager nano neovim grub os-prober efibootmgr pacman-contrib reflector pkgfile
+
 HOSTNAME=$(dialog --output-fd 1 --inputbox "Enter the hostname:" 8 40)
 USERNAME=$(dialog --output-fd 1 --inputbox "Enter the username:" 8 40)
 PASSWORD=$(dialog --insecure --output-fd 1 --passwordbox "Enter the password:" 8 40)
 clear
+
+if [[ -z "$HOSTNAME" || -z "$USERNAME" || -z "$PASSWORD" ]]; then
+    echo "Hostname, username, and password must all be non-empty. Aborting." >&2
+    exit 1
+fi
 
 # hostname config
 echo "$HOSTNAME" > /etc/hostname
@@ -24,8 +32,10 @@ echo "Created user account \"$USERNAME\""
 # setting the root password to the user's password then locking root user
 chpasswd <<< "root:$PASSWORD"
 passwd -l root
+
 # This makes it so that the root user is unlocked in case of a system emergency (like a recovery prompt)
-echo "[Service]\nEnvironment=SYSTEMD_SULOGIN_FORCE=1" > /etc/systemd/system/rescue.service.d/SYSTEMD_SULOGIN_FORCE.conf
+mkdir -p /etc/systemd/system/rescue.service.d
+printf "[Service]\nEnvironment=SYSTEMD_SULOGIN_FORCE=1\n" > /etc/systemd/system/rescue.service.d/SYSTEMD_SULOGIN_FORCE.conf
 
 # Sudo configuriation
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/00-wheel
@@ -33,7 +43,14 @@ chmod 440 /etc/sudoers.d/00-wheel
 
 # Pacman configuration
 # Enable multilib
-sed -zi "s/#\[multilib\]\n#Include =/\[multilib\]\nInclude =/" /etc/pacman.conf
+if grep -q "^\[multilib\]" /etc/pacman.conf; then
+    echo "multilib already enabled, skipping"
+else
+    sed -zi "s/#\[multilib\]\n#Include = /[multilib]\nInclude = /" /etc/pacman.conf
+    if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+        echo "WARNING: failed to enable multilib automatically — check /etc/pacman.conf manually" >&2
+    fi
+fi
 # Uncomments Color
 sed -i "/^#Color/s/^#//" /etc/pacman.conf
 pacman-key --populate archlinux
@@ -77,6 +94,10 @@ sudo echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
 sudo grub-mkconfig -o /boot/grub/grub.cfg
 
 # Download the next script
-curl -o "/home/$USERNAME/install.sh" https://kensa.fr/arch/install-postboot.sh
-
-echo "You can now reboot and run ~/install.sh"
+if curl -fL -o "/home/$USERNAME/install-postboot.sh" https://raw.githubusercontent.com/Kensaa/arch-install-scripts/refs/heads/main/install-postboot.sh; then
+    chmod +x "/home/$USERNAME/install-postboot.sh"
+    chown "$USERNAME:$USERNAME" "/home/$USERNAME/install-postboot.sh"
+    echo "You can now reboot and run ~/install-postboot.sh"
+else
+    echo "WARNING: failed to download install-postboot.sh — fetch it manually after reboot." >&2
+fi
